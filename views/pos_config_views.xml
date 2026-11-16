@@ -1,6 +1,5 @@
-<?xml version='1.0' encoding='utf-8'?>
+<?xml version="1.0" encoding="utf-8"?>
 <odoo>
-    <!-- Inherits `pos.config` form view to add the new fields for the configuration for custom receipt design -->
     <record id="pos_config_view_form" model="ir.ui.view">
         <field name="name">pos.config.view.form.inherit.custom.receipts.for.pos</field>
         <field name="model">pos.config</field>
@@ -15,10 +14,8 @@
                             <field name="receipt_print_method" style="width: 66.666666%;"/>
                         </div>
                         <div class="row mt16" invisible="not is_custom_receipt">
-                            <label class="col-lg-4 o_light_label"
-                                   for="receipt_design_id"/>
-                            <field name="receipt_design_id"
-                                   required="is_custom_receipt"/>
+                            <label class="col-lg-4 o_light_label" for="receipt_design_id"/>
+                            <field name="receipt_design_id" required="is_custom_receipt"/>
                         </div>
                     </div>
                 </setting>
@@ -30,14 +27,16 @@
                             <field name="last_receipt_print_method" style="width: 66.666666%;"/>
                         </div>
                         <div class="row mt16 flex">
+                            <label string="Duplicate Banner" for="last_receipt_show_duplicate_badge" class="col-lg-4 o_light_label"/>
+                            <field name="last_receipt_show_duplicate_badge" style="width: 66.666666%;"/>
+                        </div>
+                        <div class="row mt16 flex">
                             <label string="Use Custom Design" for="is_print_last_receipt" class="col-lg-4 o_light_label"/>
                             <field name="is_print_last_receipt" style="width: 66.666666%;"/>
                         </div>
                         <div class="row mt16" invisible="not is_print_last_receipt">
-                            <label class="col-lg-4 o_light_label"
-                                   for="last_receipt_design_id"/>
-                            <field name="last_receipt_design_id"
-                                   required="is_print_last_receipt"/>
+                            <label class="col-lg-4 o_light_label" for="last_receipt_design_id"/>
+                            <field name="last_receipt_design_id" required="is_print_last_receipt"/>
                         </div>
                     </div>
                 </setting>

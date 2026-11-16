@@ -1,16 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!--Inherit point_of_sale.OrderReceipt for getting our custom receipt design-->
 <templates id="template" xml:space="preserve">
     <t t-inherit="point_of_sale.OrderReceipt" t-inherit-mode="extension">
         <!-- Conditional display of the default receipt -->
         <xpath expr="//div[hasclass('pos-receipt')]" position="attributes">
-            <attribute name="t-if">isTrue or !templateComponent</attribute>
+            <attribute name="t-if">this.isTrue or !this.templateComponent</attribute>
         </xpath>
-        
-        <!-- Add our custom receipt before the default one, visible when default is hidden -->
+
+        <!-- Custom receipt component -->
         <xpath expr="//div[hasclass('pos-receipt')]" position="before">
-            <div class="pos-receipt" t-if="!isTrue and templateComponent">
-                <t t-component="templateComponent" t-props="templateProps"/>
+            <div class="pos-receipt" t-if="!this.isTrue and this.templateComponent">
+                <t t-component="this.templateComponent" t-props="this.templateProps"/>
             </div>
         </xpath>
     </t>

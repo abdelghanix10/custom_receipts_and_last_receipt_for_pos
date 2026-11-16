@@ -1,12 +1,11 @@
-# Custom POS Receipt Design & Last Receipt - Odoo 19.0
+# Custom POS Receipt Design & Last Receipt - Odoo 20.0
 
-![Odoo Version](https://img.shields.io/badge/Odoo-19.0-blue)
+![Odoo Version](https://img.shields.io/badge/Odoo-20.0-blue)
 ![License](https://img.shields.io/badge/License-OPL--1-yellow)
-![Version](https://img.shields.io/badge/Version-19.0.1.0.0-green)
 
 ## Overview
 
-Enhance your Point of Sale experience with custom receipt designs and convenient last receipt printing functionality for Odoo 19.0.
+Enhance your Point of Sale experience with custom receipt designs and convenient last receipt printing functionality for Odoo 20.0.
 
 ## Key Features
 
@@ -118,24 +117,7 @@ custom_receipts_and_last_receipt_for_pos/
 
 For support, feature requests, or bug reports:
 
-- **Repository**: [GitHub](https://github.com/abdelghanix10/Custom-Receipt-Print-Last-Receipt-for-Odoo-Pos)
-
-## Changelog
-
-### Version 19.0.1.0.0 (2025-12-14)
-
-- Updated module for Odoo 19.0 compatibility
-- Maintained OWL framework implementation for POS frontend
-- All existing features fully functional in Odoo 19
-
-### Version 18.0.1.0.0 (2025-11-09)
-
-- Initial release for Odoo 18.0
-- Multiple receipt design templates
-- Last receipt printing functionality
-- Smart order detection
-- Easy POS configuration integration
-- Error handling and notifications
+- **Repository**: [GitHub](https://github.com/abdelghanix10/custom_receipts_and_last_receipt_for_pos)
 
 ## License
 

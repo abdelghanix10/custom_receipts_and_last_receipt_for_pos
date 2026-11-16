@@ -1,34 +1,43 @@
 /** @odoo-module */
 import { OrderReceipt } from "@point_of_sale/app/screens/receipt_screen/receipt/order_receipt";
 import { patch } from "@web/core/utils/patch";
-import { useState, Component, xml } from "@odoo/owl";
-import { useService } from "@web/core/utils/hooks";
+import { proxy, Component, xml } from "@odoo/owl";
+import { usePos } from "@point_of_sale/app/hooks/pos_hook";
 
-// Patch OrderReceipt props to accept 'data' parameter for custom receipt data
-patch(OrderReceipt, {
-  props: { ...OrderReceipt.props, data: { type: Object, optional: true } },
-});
+// Cache compiled dynamic OWL 3 receipt components by XML content
+const _compiledReceiptComponentCache = new Map();
+
+/**
+ * Normalizes custom receipt XML for Odoo 20 (OWL 3):
+ * 1. Replaces deprecated `t-esc=` with `t-out=`
+ * 2. Prefixes standalone `props.` and `env.` references with `this.`
+ */
+function normalizeReceiptXmlForOwl3(rawXml) {
+  if (!rawXml) {
+    return "";
+  }
+  return rawXml
+    .replace(/\bt-esc=/g, "t-out=")
+    .replace(/(?<![.\w])props\./g, "this.props.")
+    .replace(/(?<![.\w])env\./g, "this.env.");
+}
 
 patch(OrderReceipt.prototype, {
   setup() {
-    super.setup();
-    this.state = useState({
+    super.setup(...arguments);
+    this.state = proxy({
       template: true,
     });
-    this.pos = useState(useService("pos"));
+    this.pos = usePos();
   },
 
   get templateProps() {
-    // Debug logging
-
-    // Check if we have pre-built receipt data (from last receipt printing)
     const prebuiltData = this.props.data || this.props.order?.receiptData;
 
     if (
       prebuiltData &&
       (prebuiltData.orderlines || prebuiltData.last_receipt)
     ) {
-      // Use pre-built receipt data (from print last receipt feature)
       const headerData = prebuiltData.headerData || {};
       const safeData = {
         ...prebuiltData,
@@ -41,6 +50,7 @@ patch(OrderReceipt.prototype, {
         change: prebuiltData.change || 0,
         name: prebuiltData.name || "",
         date: prebuiltData.date || "",
+        is_duplicate: Boolean(prebuiltData.is_duplicate),
         headerData: {
           header: headerData.header || "",
           cashier: headerData.cashier || "",
@@ -58,9 +68,7 @@ patch(OrderReceipt.prototype, {
       };
     }
 
-    // For regular receipts, extract data from the live order object
     const order = this.props.order;
-
     if (!order) {
       return {
         data: {},
@@ -71,12 +79,9 @@ patch(OrderReceipt.prototype, {
       };
     }
 
-    // Extract order lines from the order object
-    let orderlines = [];
+    // Extract order lines
     const lines =
       order.lines || order.orderlines || order.get_orderlines?.() || [];
-
-    // Convert to array if needed
     let linesArray = [];
     if (Array.isArray(lines)) {
       linesArray = lines;
@@ -86,8 +91,7 @@ patch(OrderReceipt.prototype, {
       linesArray = [...lines];
     }
 
-    orderlines = linesArray.map((line, idx) => {
-      // Handle both model objects and plain data
+    const orderlines = linesArray.map((line, idx) => {
       let productName = "Product";
       if (line.full_product_name) {
         productName = line.full_product_name;
@@ -96,11 +100,9 @@ patch(OrderReceipt.prototype, {
       } else if (line.product) {
         productName =
           line.product.display_name || line.product.name || "Product";
-      } else if (line.product_id) {
-        if (typeof line.product_id === "object") {
-          productName =
-            line.product_id.display_name || line.product_id.name || "Product";
-        }
+      } else if (line.product_id && typeof line.product_id === "object") {
+        productName =
+          line.product_id.display_name || line.product_id.name || "Product";
       }
 
       const qty = line.quantity || line.qty || line.get_quantity?.() || 0;
@@ -109,29 +111,29 @@ patch(OrderReceipt.prototype, {
         line.get_display_price?.() ||
         line.price ||
         0;
+      const unitPrice = line.price_unit || line.get_unit_display_price?.() || 0;
       const discount = line.discount || line.get_discount?.() || 0;
 
       return {
         id: line.id || `line_${idx}`,
-        productName: productName,
-        qty: qty,
+        productName,
+        qty,
+        unit_price: this.env.utils?.formatCurrency?.(unitPrice) || unitPrice,
         price: this.env.utils?.formatCurrency?.(price) || price,
-        discount: discount,
+        discount,
         customerNote: line.customer_note || line.customerNote || "",
         price_subtotal_incl: price,
         price_subtotal: line.price_subtotal || price,
-        price_unit: line.price_unit || line.get_unit_display_price?.() || 0,
+        price_unit: unitPrice,
       };
     });
 
-    // Extract payment lines - filter out negative amounts (these are change, not actual payments)
-    let paymentlines = [];
+    // Extract payment lines
     const payments =
       order.payment_ids ||
       order.paymentlines ||
       order.get_paymentlines?.() ||
       [];
-
     let paymentsArray = [];
     if (Array.isArray(payments)) {
       paymentsArray = payments;
@@ -141,83 +143,61 @@ patch(OrderReceipt.prototype, {
       paymentsArray = [...payments];
     }
 
-    paymentlines = paymentsArray
+    const paymentlines = paymentsArray
       .filter((payment) => {
-        // Filter out negative amounts (change) and zero amounts
         const amount = payment.amount || payment.get_amount?.() || 0;
         return amount > 0;
       })
       .map((payment, idx) => {
         let name = "Payment";
-        if (payment.payment_method_id) {
-          if (typeof payment.payment_method_id === "object") {
-            name = payment.payment_method_id.name || "Payment";
-          }
+        if (
+          payment.payment_method_id &&
+          typeof payment.payment_method_id === "object"
+        ) {
+          name = payment.payment_method_id.name || "Payment";
         } else if (payment.name) {
           name = payment.name;
         } else if (payment.payment_method) {
           name = payment.payment_method.name || "Payment";
         }
-
         return {
           id: payment.id || `payment_${idx}`,
-          name: name,
+          name,
           amount: payment.amount || payment.get_amount?.() || 0,
         };
       });
 
-    // Extract tax details from the order
-    let tax_details = [];
-    const taxLines = order.tax_ids || order.get_tax_details?.() || [];
-
-    if (Array.isArray(taxLines)) {
-      tax_details = taxLines;
-    } else if (typeof taxLines === "object" && taxLines !== null) {
-      // Convert tax object to array format expected by templates
-      tax_details = Object.entries(taxLines).map(([key, value], idx) => ({
-        id: `tax_${idx}`,
-        tax: { name: key },
-        amount: Math.round(value * 100) / 100,
-      }));
-    }
-
-    // We only want to show total_tax, not individual tax lines
-    // So we don't populate tax_details for the templates
-    // Just calculate total_tax with proper rounding
-
-    // Build the complete receipt data
     const amount_total =
       order.amount_total || order.get_total_with_tax?.() || 0;
     const amount_tax = order.amount_tax || order.get_total_tax?.() || 0;
     const change = order.amount_return || order.get_change?.() || 0;
 
-    // Format the date properly
     let formattedDate = "";
     const rawDate = order.date_order || order.validation_date;
     if (rawDate) {
       try {
         const dateObj = new Date(rawDate);
-        formattedDate =
-          dateObj.toLocaleDateString() + " " + dateObj.toLocaleTimeString();
-      } catch (e) {
-        formattedDate = rawDate;
+        formattedDate = `${dateObj.toLocaleDateString()} ${dateObj.toLocaleTimeString()}`;
+      } catch {
+        formattedDate = String(rawDate);
       }
     } else {
-      formattedDate =
-        new Date().toLocaleDateString() + " " + new Date().toLocaleTimeString();
+      const now = new Date();
+      formattedDate = `${now.toLocaleDateString()} ${now.toLocaleTimeString()}`;
     }
 
     const receiptData = {
       name: order.name || order.pos_reference || "",
       date: formattedDate,
-      orderlines: orderlines,
-      paymentlines: paymentlines,
+      orderlines,
+      paymentlines,
       amount_total: Math.round(amount_total * 100) / 100,
       total_with_tax: Math.round(amount_total * 100) / 100,
       total_without_tax: Math.round((amount_total - amount_tax) * 100) / 100,
       change: Math.round(change * 100) / 100,
-      tax_details: [], // Empty - we only show total_tax
+      tax_details: [],
       total_tax: Math.round(amount_tax * 100) / 100,
+      is_duplicate: false,
       headerData: {
         header: this.pos.config?.receipt_header || "",
         cashier: this.pos.cashier?.name || this.pos.user?.name || "",
@@ -227,57 +207,51 @@ patch(OrderReceipt.prototype, {
 
     return {
       data: receiptData,
-      order: order,
+      order,
       receipt: receiptData,
-      orderlines: orderlines,
-      paymentlines: paymentlines,
+      orderlines,
+      paymentlines,
     };
   },
 
   get templateComponent() {
-    var mainRef = this;
-    var receipt_design = mainRef.pos.config.design_receipt;
-    var useCustom = mainRef.pos.config.is_custom_receipt;
+    let receipt_design = this.pos.config.design_receipt;
+    let useCustom = this.pos.config.is_custom_receipt;
 
-    // Check if this is a last_receipt scenario (data may come from props.data or props.order.receiptData)
     const isLastReceipt =
       this.props.data?.last_receipt ||
       this.props.order?.receiptData?.last_receipt;
     if (isLastReceipt) {
-      receipt_design = mainRef.pos.config.last_design_receipt;
-      useCustom = mainRef.pos.config.is_print_last_receipt;
+      receipt_design = this.pos.config.last_design_receipt;
+      useCustom = this.pos.config.is_print_last_receipt;
     }
 
-    // Only use custom design if the respective setting is enabled
-    if (!useCustom) {
-      return null; // Return null to use default OrderReceipt template
+    if (!useCustom || !receipt_design) {
+      return null;
     }
 
-    // Return component class with proper props declaration
-    return class CustomReceiptDesign extends Component {
-      static template = xml`${receipt_design}`;
-      static props = ["*"];
-      setup() {}
-    };
+    const normalizedXml = normalizeReceiptXmlForOwl3(receipt_design);
+    if (_compiledReceiptComponentCache.has(normalizedXml)) {
+      return _compiledReceiptComponentCache.get(normalizedXml);
+    }
+
+    // In OWL 3 (Odoo 20), do NOT define `static props` on components
+    class CustomReceiptDesign extends Component {
+      static template = xml`${normalizedXml}`;
+    }
+
+    _compiledReceiptComponentCache.set(normalizedXml, CustomReceiptDesign);
+    return CustomReceiptDesign;
   },
 
   get isTrue() {
-    // Check if this is a last_receipt scenario
     const isLastReceipt =
       this.props.data?.last_receipt ||
       this.props.order?.receiptData?.last_receipt;
 
-    // For last receipt, check is_print_last_receipt
     if (isLastReceipt) {
-      if (this.env.services.pos.config.is_print_last_receipt == false) {
-        return true;
-      }
-      return false;
+      return !this.pos.config.is_print_last_receipt;
     }
-    // For regular receipt, check is_custom_receipt
-    if (this.env.services.pos.config.is_custom_receipt == false) {
-      return true;
-    }
-    return false;
+    return !this.pos.config.is_custom_receipt;
   },
 });

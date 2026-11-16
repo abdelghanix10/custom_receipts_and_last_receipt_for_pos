@@ -1,47 +1,28 @@
 {
     'name': 'Custom POS Receipt Design & Last Receipt',
-    'version': '19.0.1.0.0',
-    'category': 'Point of Sale',
+    'version': '20.0.2.0.0',
+    'category': 'Sales/Point of Sale',
     'summary': 'Customize POS receipt designs and print last receipt with one click',
     'description': """
-        Custom POS Receipt Design & Last Receipt
-        ========================================
-        
-        Enhance your Point of Sale experience with custom receipt designs and convenient last receipt printing functionality.
-        
-        Key Features:
-        -------------
-        * **Multiple Receipt Designs**: Choose from pre-designed receipt templates
-        * **Custom Receipt Layouts**: Personalize receipt appearance and branding
-        * **Print Last Receipt**: One-click button to reprint the most recent receipt
-        * **Smart Order Detection**: Automatically identifies the last paid order
-        * **Error Handling**: Clear notifications for success and error states
-        * **Easy Configuration**: Simple setup through POS configuration
-        * **Seamless Integration**: Works with existing POS workflow
-        
-        Perfect for:
-        ------------
-        * Retail stores needing branded receipts
-        * Restaurants with custom receipt requirements
-        * Businesses requiring receipt reprints
-        * Any POS setup wanting enhanced receipt functionality
-        
-        Installation:
-        -------------
-        1. Install the module
-        2. Configure receipt design in POS settings
-        3. Start using custom receipts and last receipt printing
+Custom POS Receipt Design & Last Receipt (Odoo 20)
+==================================================
+Enhance your Point of Sale experience with custom receipt designs and convenient last receipt printing functionality.
+- Multiple Receipt Designs with backend XML syntax validation
+- Automatic OWL 3 (t-out / this.props) compatibility for custom XML templates
+- One-click Print Last Receipt with optional DUPLICATE watermark banner
+- Supports both Chrome Print Preview and QZ Tray direct thermal printing
+- Open Cash Drawer Only mode via QZ Tray ESC/POS pulse commands
     """,
     'author': 'Abdelghani X',
     'images': ['static/description/banner.png'],
     'depends': ['point_of_sale', 'odoo_qz_print', 'pos_print_second_receipt'],
     'data': [
-        'security/ir.model.access.csv',
+        'security/ir.access.csv',
         'data/pos_receipt_design1_data.xml',
         'data/pos_receipt_design2_data.xml',
         'data/pos_receipt_design3_data.xml',
         'views/pos_receipt_views.xml',
-        'views/pos_config_views.xml'
+        'views/pos_config_views.xml',
     ],
     'assets': {
         'point_of_sale._assets_pos': [
@@ -54,5 +35,6 @@
     },
     'installable': True,
     'auto_install': False,
-    'application': False
+    'application': False,
+    'license': 'OPL-1',
 }
