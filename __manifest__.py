@@ -29,7 +29,6 @@ Enhance your Point of Sale experience with custom receipt designs and convenient
             'custom_receipts_and_last_receipt_for_pos/static/src/js/receipt_design.js',
             'custom_receipts_and_last_receipt_for_pos/static/src/js/print_last_receipt.js',
             'custom_receipts_and_last_receipt_for_pos/static/src/js/cash_drawer_pos.js',
-            'custom_receipts_and_last_receipt_for_pos/static/src/xml/order_receipt.xml',
             'custom_receipts_and_last_receipt_for_pos/static/src/xml/print_last_receipt_button.xml',
         ],
     },

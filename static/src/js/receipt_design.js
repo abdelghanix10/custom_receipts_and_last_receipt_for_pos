@@ -1,211 +1,227 @@
 /** @odoo-module */
-import { OrderReceipt } from "@point_of_sale/app/screens/receipt_screen/receipt/order_receipt";
+
+import { Component, useProps, xml } from "@odoo/owl";
+import { PosTicketPrinterPlugin } from "@point_of_sale/app/plugins/pos_ticket_printer_plugin";
+import { waitImages } from "@point_of_sale/utils";
+import { formatCurrency } from "@web/core/currency";
 import { patch } from "@web/core/utils/patch";
-import { proxy, Component, xml } from "@odoo/owl";
-import { usePos } from "@point_of_sale/app/hooks/pos_hook";
+import { renderToElement } from "@web/core/utils/render";
+import { getQzService } from "@odoo_qz_print/qz_service";
 
-// Cache compiled dynamic OWL 3 receipt components by XML content
-const _compiledReceiptComponentCache = new Map();
+const compiledReceiptComponentCache = new Map();
 
-/**
- * Normalizes custom receipt XML for Odoo 20 (OWL 3):
- * 1. Replaces deprecated `t-esc=` with `t-out=`
- * 2. Prefixes standalone `props.` and `env.` references with `this.`
- */
 function normalizeReceiptXmlForOwl3(rawXml) {
   if (!rawXml) {
     return "";
   }
   return rawXml
     .replace(/\bt-esc=/g, "t-out=")
-    .replace(/(?<![.\w])props\./g, "this.props.")
-    .replace(/(?<![.\w])env\./g, "this.env.");
+    .replace(/(?<![.\w])(?:this\.)?props\./g, "this.props.")
+    .replace(/(?<![.\w])(?:this\.)?env\./g, "this.receiptEnv.");
 }
 
-patch(OrderReceipt.prototype, {
-  setup() {
-    super.setup(...arguments);
-    this.state = proxy({
-      template: true,
+function getCompiledReceiptComponent(rawXml) {
+  const normalizedXml = normalizeReceiptXmlForOwl3(rawXml);
+  if (!normalizedXml) {
+    return null;
+  }
+  if (compiledReceiptComponentCache.has(normalizedXml)) {
+    return compiledReceiptComponentCache.get(normalizedXml);
+  }
+
+  class CustomReceiptDesign extends Component {
+    static template = xml`${normalizedXml}`;
+    props = useProps();
+
+    get receiptEnv() {
+      return this.props._receiptEnv;
+    }
+  }
+
+  compiledReceiptComponentCache.set(normalizedXml, CustomReceiptDesign);
+  return CustomReceiptDesign;
+}
+
+function toArray(collection) {
+  if (!collection) {
+    return [];
+  }
+  if (Array.isArray(collection)) {
+    return collection;
+  }
+  if (typeof collection.getAll === "function") {
+    return collection.getAll();
+  }
+  if (typeof collection[Symbol.iterator] === "function") {
+    return [...collection];
+  }
+  return [];
+}
+
+function wrapCustomReceiptHtml(innerHtml, { isDuplicate = false } = {}) {
+  const duplicateBanner = isDuplicate
+    ? `<div style="text-align:center; font-weight:bold; font-size:15px; border:2px solid #000; padding:4px; margin-bottom:8px;">*** DUPLICATE RECEIPT ***</div>`
+    : "";
+
+  return `<html id="pos-receipt">
+    <head>
+      <meta charset="utf-8"/>
+      <style>
+        body { font-family: "Courier New", Courier, monospace; font-weight: bold; margin: 0; padding: 8px; }
+        table { table-layout: fixed; width: 100%; }
+        .pos-receipt-print { font-size: 14px; }
+        .pos-receipt-right-align { float: right; }
+        .pos-receipt-logo { max-width: 150px; display: block; margin: 0 auto; }
+      </style>
+    </head>
+    <body><div class="pos-receipt-print">${duplicateBanner}${innerHtml}</div></body>
+  </html>`;
+}
+
+patch(PosTicketPrinterPlugin.prototype, {
+  _buildCustomReceiptEnv() {
+    const config = this.config;
+    const company = config?.company_id || {};
+    const currencyId = config?.currency_id?.id;
+    const companyProxy = Object.assign(Object.create(company), {
+      vat_label: company?.vat_label || company?.country_id?.vat_label || "Tax ID",
     });
-    this.pos = usePos();
+    const fmtCurrency = (amount) => {
+      try {
+        return currencyId ? formatCurrency(amount || 0, currencyId) : String(amount || 0);
+      } catch {
+        return String(amount || 0);
+      }
+    };
+
+    return {
+      services: {
+        ...(this.env?.services || {}),
+        pos: { config, company: companyProxy, models: this.data.models },
+      },
+      utils: { ...(this.env?.utils || {}), formatCurrency: fmtCurrency },
+    };
   },
 
-  get templateProps() {
-    const prebuiltData = this.props.data || this.props.order?.receiptData;
-
-    if (
-      prebuiltData &&
-      (prebuiltData.orderlines || prebuiltData.last_receipt)
-    ) {
-      const headerData = prebuiltData.headerData || {};
-      const safeData = {
-        ...prebuiltData,
-        orderlines: prebuiltData.orderlines || [],
-        paymentlines: prebuiltData.paymentlines || [],
-        tax_details: prebuiltData.tax_details || [],
-        amount_total: prebuiltData.amount_total || 0,
-        total_with_tax: prebuiltData.total_with_tax || 0,
-        total_without_tax: prebuiltData.total_without_tax || 0,
-        change: prebuiltData.change || 0,
-        name: prebuiltData.name || "",
-        date: prebuiltData.date || "",
-        is_duplicate: Boolean(prebuiltData.is_duplicate),
-        headerData: {
-          header: headerData.header || "",
-          cashier: headerData.cashier || "",
-          company: headerData.company || {},
-          ...headerData,
-        },
-      };
-
-      return {
-        data: safeData,
-        order: this.props.order,
-        receipt: safeData,
-        orderlines: safeData.orderlines,
-        paymentlines: safeData.paymentlines,
-      };
-    }
-
-    const order = this.props.order;
-    if (!order) {
-      return {
-        data: {},
-        order: null,
-        receipt: { headerData: { header: "", cashier: "", company: {} } },
-        orderlines: [],
-        paymentlines: [],
-      };
-    }
-
-    // Extract order lines
-    const lines =
-      order.lines || order.orderlines || order.get_orderlines?.() || [];
-    let linesArray = [];
-    if (Array.isArray(lines)) {
-      linesArray = lines;
-    } else if (typeof lines.getAll === "function") {
-      linesArray = lines.getAll();
-    } else if (typeof lines[Symbol.iterator] === "function") {
-      linesArray = [...lines];
-    }
-
-    const orderlines = linesArray.map((line, idx) => {
-      let productName = "Product";
-      if (line.full_product_name) {
-        productName = line.full_product_name;
-      } else if (line.get_full_product_name) {
-        productName = line.get_full_product_name();
-      } else if (line.product) {
-        productName =
-          line.product.display_name || line.product.name || "Product";
-      } else if (line.product_id && typeof line.product_id === "object") {
-        productName =
-          line.product_id.display_name || line.product_id.name || "Product";
+  _buildCustomReceiptTemplateProps(order, { isLastReceipt = false } = {}) {
+    const receiptEnv = this._buildCustomReceiptEnv();
+    const fmtCurrency = receiptEnv.utils.formatCurrency;
+    const config = this.config;
+    const company = receiptEnv.services.pos.company;
+    const linesArray = toArray(
+      order?.lines || order?.line_ids || order?.orderlines || order?.get_orderlines?.(),
+    );
+    const orderlines = linesArray.map((rawLine, idx) => {
+      let line = rawLine;
+      if (typeof rawLine === "number" || typeof rawLine === "string") {
+        line = this.data.models["pos.order.line"]?.get(rawLine) || {};
       }
-
-      const qty = line.quantity || line.qty || line.get_quantity?.() || 0;
-      const price =
-        line.price_subtotal_incl ||
-        line.get_display_price?.() ||
-        line.price ||
-        0;
-      const unitPrice = line.price_unit || line.get_unit_display_price?.() || 0;
-      const discount = line.discount || line.get_discount?.() || 0;
-
+      let productName = "Product";
+      if (typeof line.getFullProductName === "function") {
+        productName = line.getFullProductName();
+      } else if (line.full_product_name) {
+        productName = line.full_product_name;
+      } else if (line.product_id) {
+        if (typeof line.product_id === "object") {
+          productName = line.product_id.display_name || line.product_id.name || "Product";
+        } else if (typeof line.product_id === "number") {
+          const product = this.data.models["product.product"]?.get(line.product_id);
+          productName = product?.display_name || product?.name || "Product";
+        }
+      }
+      const qty = line.qty ?? line.quantity ?? 0;
+      const unitPrice = line.price_unit ?? 0;
+      const subtotalIncl = line.price_subtotal_incl ?? unitPrice * qty;
       return {
         id: line.id || `line_${idx}`,
         productName,
         qty,
-        unit_price: this.env.utils?.formatCurrency?.(unitPrice) || unitPrice,
-        price: this.env.utils?.formatCurrency?.(price) || price,
-        discount,
+        unit_price: fmtCurrency(unitPrice),
+        price: fmtCurrency(subtotalIncl),
+        discount: line.discount || 0,
         customerNote: line.customer_note || line.customerNote || "",
-        price_subtotal_incl: price,
-        price_subtotal: line.price_subtotal || price,
+        price_subtotal_incl: subtotalIncl,
+        price_subtotal: line.price_subtotal ?? subtotalIncl,
         price_unit: unitPrice,
       };
     });
 
-    // Extract payment lines
-    const payments =
-      order.payment_ids ||
-      order.paymentlines ||
-      order.get_paymentlines?.() ||
-      [];
-    let paymentsArray = [];
-    if (Array.isArray(payments)) {
-      paymentsArray = payments;
-    } else if (typeof payments.getAll === "function") {
-      paymentsArray = payments.getAll();
-    } else if (typeof payments[Symbol.iterator] === "function") {
-      paymentsArray = [...payments];
-    }
-
+    const paymentsArray = toArray(
+      order?.payment_ids || order?.payments || order?.paymentlines || order?.get_paymentlines?.(),
+    );
     const paymentlines = paymentsArray
-      .filter((payment) => {
-        const amount = payment.amount || payment.get_amount?.() || 0;
-        return amount > 0;
+      .map((rawPayment) => {
+        if (typeof rawPayment === "number" || typeof rawPayment === "string") {
+          return this.data.models["pos.payment"]?.get(rawPayment) || {};
+        }
+        return rawPayment;
       })
+      .filter((payment) => (payment.amount || 0) > 0)
       .map((payment, idx) => {
         let name = "Payment";
-        if (
-          payment.payment_method_id &&
-          typeof payment.payment_method_id === "object"
-        ) {
-          name = payment.payment_method_id.name || "Payment";
+        if (payment.payment_method_id) {
+          if (typeof payment.payment_method_id === "object") {
+            name = payment.payment_method_id.name || "Payment";
+          } else if (typeof payment.payment_method_id === "number") {
+            const method = this.data.models["pos.payment.method"]?.get(payment.payment_method_id);
+            name = method?.name || "Payment";
+          }
         } else if (payment.name) {
           name = payment.name;
-        } else if (payment.payment_method) {
-          name = payment.payment_method.name || "Payment";
         }
-        return {
-          id: payment.id || `payment_${idx}`,
-          name,
-          amount: payment.amount || payment.get_amount?.() || 0,
-        };
+        return { id: payment.id || `payment_${idx}`, name, amount: payment.amount || 0, ticket: payment.ticket || "" };
       });
 
-    const amount_total =
-      order.amount_total || order.get_total_with_tax?.() || 0;
-    const amount_tax = order.amount_tax || order.get_total_tax?.() || 0;
-    const change = order.amount_return || order.get_change?.() || 0;
-
-    let formattedDate = "";
-    const rawDate = order.date_order || order.validation_date;
-    if (rawDate) {
-      try {
-        const dateObj = new Date(rawDate);
-        formattedDate = `${dateObj.toLocaleDateString()} ${dateObj.toLocaleTimeString()}`;
-      } catch {
-        formattedDate = String(rawDate);
-      }
-    } else {
-      const now = new Date();
-      formattedDate = `${now.toLocaleDateString()} ${now.toLocaleTimeString()}`;
+    let taxDetails = [];
+    try {
+      const priceData = order?._constructPriceData?.();
+      const taxGroups = priceData?.taxDetails?.subtotals?.[0]?.tax_groups || [];
+      taxDetails = taxGroups.map((group, idx) => ({
+        id: idx,
+        tax: { name: group.group_name },
+        amount: group.tax_amount,
+      }));
+    } catch {
+      taxDetails = [];
     }
 
+    const amountTotal = Math.round((order?.amount_total || 0) * 100) / 100;
+    const amountTax = Math.round((order?.amount_tax || 0) * 100) / 100;
+    const change = Math.round((order?.amount_return || 0) * 100) / 100;
+    const totalDiscount =
+      typeof order?.getTotalDiscount === "function" ? order.getTotalDiscount() : 0;
+    let formattedDate = "";
+    if (typeof order?.formatDateOrTime === "function" && order?.date_order) {
+      formattedDate = order.formatDateOrTime("date_order", "datetime");
+    } else if (order?.date_order) {
+      formattedDate = String(order.date_order);
+    } else {
+      formattedDate = new Date().toLocaleString();
+    }
+    const cashierName =
+      order?.getCashierName?.() || order?.employee_id?.name || order?.user_id?.name || "";
+    const isDuplicate = isLastReceipt && Boolean(config?.last_receipt_show_duplicate_badge);
     const receiptData = {
-      name: order.name || order.pos_reference || "",
+      name: order?.name || order?.pos_reference || "",
       date: formattedDate,
       orderlines,
       paymentlines,
-      amount_total: Math.round(amount_total * 100) / 100,
-      total_with_tax: Math.round(amount_total * 100) / 100,
-      total_without_tax: Math.round((amount_total - amount_tax) * 100) / 100,
-      change: Math.round(change * 100) / 100,
-      tax_details: [],
-      total_tax: Math.round(amount_tax * 100) / 100,
-      is_duplicate: false,
-      headerData: {
-        header: this.pos.config?.receipt_header || "",
-        cashier: this.pos.cashier?.name || this.pos.user?.name || "",
-        company: this.pos.company || {},
-      },
+      amount_total: amountTotal,
+      total_with_tax: amountTotal,
+      total_without_tax: Math.round((amountTotal - amountTax) * 100) / 100,
+      amount_tax: amountTax,
+      total_tax: amountTax,
+      change,
+      total_discount: totalDiscount ? fmtCurrency(totalDiscount) : 0,
+      tax_details: taxDetails,
+      footer: config?.receipt_footer || "",
+      footer_html: false,
+      last_receipt: isLastReceipt,
+      is_duplicate: isDuplicate,
+      headerData: { header: config?.receipt_header || "", cashier: cashierName, company },
     };
-
     return {
+      _receiptEnv: receiptEnv,
       data: receiptData,
       order,
       receipt: receiptData,
@@ -214,44 +230,108 @@ patch(OrderReceipt.prototype, {
     };
   },
 
-  get templateComponent() {
-    let receipt_design = this.pos.config.design_receipt;
-    let useCustom = this.pos.config.is_custom_receipt;
-
-    const isLastReceipt =
-      this.props.data?.last_receipt ||
-      this.props.order?.receiptData?.last_receipt;
-    if (isLastReceipt) {
-      receipt_design = this.pos.config.last_design_receipt;
-      useCustom = this.pos.config.is_print_last_receipt;
-    }
-
-    if (!useCustom || !receipt_design) {
-      return null;
-    }
-
-    const normalizedXml = normalizeReceiptXmlForOwl3(receipt_design);
-    if (_compiledReceiptComponentCache.has(normalizedXml)) {
-      return _compiledReceiptComponentCache.get(normalizedXml);
-    }
-
-    // In OWL 3 (Odoo 20), do NOT define `static props` on components
-    class CustomReceiptDesign extends Component {
-      static template = xml`${normalizedXml}`;
-    }
-
-    _compiledReceiptComponentCache.set(normalizedXml, CustomReceiptDesign);
-    return CustomReceiptDesign;
+  async _generateCustomIframe(htmlString) {
+    const container = document.getElementById("receipt-iframe-container");
+    const iframe = document.createElement("iframe");
+    iframe.style.width = "100%";
+    iframe.style.height = "100%";
+    iframe.style.border = "none";
+    iframe.srcdoc = htmlString;
+    container.innerHTML = "";
+    container.appendChild(iframe);
+    await new Promise((resolve) => (iframe.onload = resolve));
+    await waitImages(iframe.contentDocument.body);
+    return iframe;
   },
 
-  get isTrue() {
-    const isLastReceipt =
-      this.props.data?.last_receipt ||
-      this.props.order?.receiptData?.last_receipt;
-
-    if (isLastReceipt) {
-      return !this.pos.config.is_print_last_receipt;
+  async _renderCustomReceiptHtml(order, { rawXml, isLastReceipt = false } = {}) {
+    const ReceiptComponent = getCompiledReceiptComponent(rawXml);
+    if (!ReceiptComponent) {
+      return null;
     }
-    return !this.pos.config.is_custom_receipt;
+    const props = this._buildCustomReceiptTemplateProps(order, { isLastReceipt });
+    const innerHtml = await this.getHtmlFromComponent(ReceiptComponent, props);
+    return wrapCustomReceiptHtml(innerHtml, { isDuplicate: props.receipt.is_duplicate });
+  },
+
+  async printOrderReceipt({
+    order,
+    basic = false,
+    printBillActionTriggered = false,
+    webFallback = true,
+    simplified = false,
+  } = {}) {
+    const useCustom = Boolean(this.config?.is_custom_receipt && this.config?.design_receipt);
+    if (useCustom) {
+      const htmlContent = await this._renderCustomReceiptHtml(order, {
+        rawXml: this.config.design_receipt,
+        isLastReceipt: false,
+      });
+      const qzService = getQzService() || this.env?.services?.qz_tray;
+      const printMethod = this.config?.receipt_print_method || "chrome";
+      let result = { successful: true };
+      if (qzService && printMethod === "qz_tray") {
+        const printerName = await qzService.getDefaultPrinter();
+        await qzService.print(printerName, htmlContent, "pixel", {});
+      } else {
+        const iframe = await this._generateCustomIframe(htmlContent);
+        result = (await this.printWithFallback({ iframe, webFallback })) || { successful: true };
+      }
+      if (!printBillActionTriggered && result) {
+        await this.markReceiptAsPrinted(order);
+      } else if (!order.nb_print) {
+        order.nb_print = 0;
+      }
+      if (typeof this.printSecondReceiptForOrder === "function") {
+        await this.printSecondReceiptForOrder(order);
+      }
+      return result;
+    }
+    return super.printOrderReceipt({
+      order,
+      basic,
+      printBillActionTriggered,
+      webFallback,
+      simplified,
+    });
+  },
+
+  async printLastOrderReceipt(order) {
+    const useCustom = Boolean(
+      this.config?.is_print_last_receipt && this.config?.last_design_receipt,
+    );
+    const printMethod = this.config?.last_receipt_print_method || "chrome";
+    const showDuplicate = Boolean(this.config?.last_receipt_show_duplicate_badge);
+    let htmlContent;
+    if (useCustom) {
+      htmlContent = await this._renderCustomReceiptHtml(order, {
+        rawXml: this.config.last_design_receipt,
+        isLastReceipt: true,
+      });
+    } else {
+      const data = this.getOrderReceiptData(order);
+      const el = renderToElement("point_of_sale.pos_order_receipt", data);
+      if (showDuplicate) {
+        const body = el.querySelector("body") || el;
+        const banner = document.createElement("div");
+        banner.style.cssText =
+          "text-align:center; font-weight:bold; font-size:15px; border:2px solid #000; padding:4px; margin-bottom:8px;";
+        banner.textContent = "*** DUPLICATE RECEIPT ***";
+        body.prepend(banner);
+      }
+      htmlContent = el.outerHTML;
+    }
+    if (printMethod === "qz_tray") {
+      const qzService = getQzService() || this.env?.services?.qz_tray;
+      if (!qzService) {
+        throw new Error("QZ Tray service not available. Please ensure odoo_qz_print is installed.");
+      }
+      const printerName = await qzService.getDefaultPrinter();
+      await qzService.print(printerName, htmlContent, "pixel", {});
+      return { successful: true, method: "qz_tray" };
+    }
+    const iframe = await this._generateCustomIframe(htmlContent);
+    await this.printWithFallback({ iframe, webFallback: true });
+    return { successful: true, method: "chrome" };
   },
 });

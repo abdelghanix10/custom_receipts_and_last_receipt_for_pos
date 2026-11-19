@@ -99,7 +99,6 @@ custom_receipts_and_last_receipt_for_pos/
 │       │   ├── print_last_receipt.js
 │       │   └── receipt_design.js
 │       └── xml/
-│           ├── order_receipt.xml
 │           └── print_last_receipt_button.xml
 └── views/
     ├── pos_config_views.xml
@@ -111,6 +110,7 @@ custom_receipts_and_last_receipt_for_pos/
 - **Models**: Custom models for POS configuration, receipt designs, and session management
 - **JavaScript**: Frontend logic for receipt selection and last receipt printing
 - **XML Templates**: Custom receipt layouts and POS interface modifications
+- **Odoo 20 Printer Plugin**: Custom printing and last-receipt behavior is integrated through `PosTicketPrinterPlugin`.
 - **Data Files**: Pre-configured receipt design templates
 
 ## Support
